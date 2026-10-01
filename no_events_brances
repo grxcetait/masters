@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+
+import argparse
+import ROOT as root
+
+# Keep ROOT headless
+root.gROOT.SetBatch(True)
+
+
+def explore_file(filename, tree_name):
+
+    # === OPEN FILE ===
+    root_file = root.TFile.Open(filename)
+
+    # Check if the file was successfully opened
+    if not root_file or root_file.IsZombie():
+        print("Error: Could not open ROOT file.")
+        return None, None
+
+    # Get TTree
+    tree = root_file.Get(tree_name)
+
+    # Check if the TTree was successfully retrieved
+    if not tree:
+        print(f"Error: Could not find '{tree_name}' TTree in file.")
+        root_file.Close()
+        return None, None
+
+    # === BASIC INFO ===
+    # Print number of events in the TTree
+    n_events = tree.GetEntries()
+    print(f"Number of events: {n_events}")
+
+    # Print the names of all branches in the TTree
+    print("\nBranches:")
+    for branch in tree.GetListOfBranches():
+        print(f"  {branch.GetName()}")
+
+    return root_file, tree
+
+
+def fill_histograms(tree, n_events, prefix):
+
+    # === DEFINE HISTOGRAMS ===
+    # Track multiplicity
+    h_mult = root.TH1F("h_mult", f"{prefix} Track Multiplicity;N tracks;Events", 50, 0, 200)
+
+    # Track parameters
+    h_pt   = root.TH1F("h_pt",   f"{prefix} Track p_{{T}};p_{{T}} [GeV];Tracks", 100, 0, 100)
+    h_eta  = root.TH1F("h_eta",  f"{prefix} Track #eta;#eta;Tracks", 100, -3, 3)
+    h_phi  = root.TH1F("h_phi",  f"{prefix} Track #phi;#phi;Tracks", 100, -3.5, 3.5)
+    h_d0   = root.TH1F("h_d0",   f"{prefix} Track d0;d0 [mm];Tracks", 100, -5, 5)
+    h_z0   = root.TH1F("h_z0",   f"{prefix} Track z0;z0 [mm];Tracks", 100, -150, 150)
+
+    # === LOOP OVER EVENTS ===
+    for i in range(n_events):
+        # Get the i-th entry in the TTree
+        tree.GetEntry(i)
+
+        # Track multiplicity for this event
+        h_mult.Fill(len(getattr(tree, f"{prefix}_pt")))
+
+        # Loop over tracks within this event
+        for pt in getattr(tree, f"{prefix}_pt"):
+            h_pt.Fill(pt)
+        for eta in getattr(tree, f"{prefix}_eta"):
+            h_eta.Fill(eta)
+        for phi in getattr(tree, f"{prefix}_phi"):
+            h_phi.Fill(phi)
+        for d0 in getattr(tree, f"{prefix}_d0"):
+            h_d0.Fill(d0)
+        for z0 in getattr(tree, f"{prefix}_z0"):
+            h_z0.Fill(z0)
+
+    return h_mult, h_pt, h_eta, h_phi, h_d0, h_z0
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description = "Loop over an Events TTree in a ROOT file and fill track histograms.")
+    parser.add_argument("-f", "--filename", type = str, required = True,
+                        help = "Path to the input ROOT file.")
+    parser.add_argument("-t", "--tree_name",type = str, default = "Events",
+                        help = "Name of the TTree to loop over (default: Events).")
+    parser.add_argument("-p", "--prefix", type = str, default = "HLTTrack",
+                        help = "Branch name prefix for track variables, e.g. HLTTrack (default: HLTTrack). "
+                        "Expects branches named <prefix>_pt, <prefix>_eta, <prefix>_phi, <prefix>_d0, <prefix>_z0.")
+    parser.add_argument("-o", "--output", type = str, default = "other",
+                        help = "Output folder name inside outputs/." )
+    args = parser.parse_args()
+
+    root_file, tree = explore_file(args.filename, args.tree_name)
+
+    if tree is None:
+        exit(1)
+
+    n_events = tree.GetEntries()
+    hists = fill_histograms(tree, n_events, args.prefix)
+
+    # === SAVE HISTOGRAMS TO A NEW ROOT FILE ===
+    outfile = root.TFile(args.output, "RECREATE")
+    for h in hists:
+        h.Write()
+    outfile.Close()
+
+    root_file.Close()
+
+    print(f"\nSaved histograms to: {args.output}")
