@@ -13,10 +13,10 @@ root.gROOT.SetBatch(True)
 def load_histogram(filename, hist_path):
     """Safely loads a 1D TH1 or TEfficiency object from a ROOT file."""
 
-    # Open the ROOT file and check for errors
+    # Open the ROOT file and check for errors
     rfile = root.TFile.Open(filename)
 
-    # Check if the file was opened successfully
+    # Check if the file was opened successfully
     if not rfile or rfile.IsZombie():
 
         # Print an error message and return None if the file could not be opened
@@ -38,14 +38,14 @@ def load_histogram(filename, hist_path):
         # If it's a TEfficiency, we need to extract the total histogram and convert it to a TH1
         eff = obj
         total = eff.GetTotalHistogram()
-        
+
         # Safety check: skip 2D or 3D efficiencies
         if total.GetDimension() != 1:
             print(f"Skipping {hist_path}: not a 1D efficiency.")
             rfile.Close()
             return None
 
-        # Clone the histogram 
+        # Clone the histogram
         hist = total.Clone(eff.GetName() + "_eff")
         hist.SetDirectory(0)
         hist.Reset()
@@ -69,8 +69,17 @@ def load_histogram(filename, hist_path):
                 # Set the bin error to the calculated error
                 hist.SetBinError(b, err)
 
+        # Reset() and SetBinContent() leave the entry count meaningless, so restore it from the total histogram
+        hist.SetEntries(total.GetEntries())
+
     else:
-        # Standard TH1s (we already filtered out TH2/TH3 during finding)
+
+        # Standard TH1s: skip anything that is not a 1D histogram
+        if not obj.InheritsFrom("TH1") or obj.GetDimension() != 1:
+            print(f"Skipping {hist_path}: not a 1D histogram.")
+            rfile.Close()
+            return None
+
         hist = obj
         hist.SetDirectory(0)
 
@@ -90,6 +99,13 @@ def find_all_histograms(filename, directory=""):
 
     # If a specific directory is provided, navigate to it; otherwise, start from the root
     target_dir = rfile.Get(directory.strip("/")) if directory else rfile
+
+    # Check if the directory was found and print an error message if not
+    if not target_dir:
+        print(f"Error: Directory '{directory}' not found in {filename}")
+        rfile.Close()
+        return []
+
     paths = []
 
     # Define a recursive function to walk through the directory structure
@@ -119,7 +135,7 @@ def find_all_histograms(filename, directory=""):
             elif cls.InheritsFrom("TH1") and not (cls.InheritsFrom("TH2") or cls.InheritsFrom("TH3")):
                 paths.append(full_path)
 
-            # Check if the object is a TEfficiency and ensure it is 1D before adding to the list
+            # Check if the object is a TEfficiency and ensure it is 1D before adding to the list
             elif cls.InheritsFrom("TEfficiency"):
 
                 # Must open the efficiency object to check its dimension
@@ -134,7 +150,7 @@ def find_all_histograms(filename, directory=""):
     rfile.Close()
 
     # Return a sorted list of unique histogram paths found in the ROOT file
-    return sorted(list(set(paths)))
+    return sorted(set(paths))
 
 
 def format_stats_label(hist, label=None, stats_choices=None, stat_errors=False):
@@ -184,5 +200,5 @@ def save_plot(fig, output_subfolder, stem, formats=("png",)):
         filepath = os.path.join(out_dir, f"{stem}.{fmt}")
         fig.savefig(filepath, dpi=300, bbox_inches="tight")
         print(f"Saved: {filepath}")
-        
+
     plt.close(fig)

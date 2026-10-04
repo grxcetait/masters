@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import sys
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import mplhep as hep
-import plotting_functions as pf
+
+# Path routing to allow importing from the utils directory
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root))
+
+# Import custom plotting functions from the utils module
+import utils.plotting_functions as pf
 
 COLOURS = ("black", "#c1272d")
 MARKERS = ("o", "s")
@@ -12,12 +21,40 @@ PLOT_KWARGS = {
     "histtype": "errorbar",
     "markersize": 4,
     "elinewidth": 1.2,
-    "capsize": 2
+    "capsize": 2,
 }
 
 
-def apply_common_axes_style(ax, args, xlabel=None, ylabel=None, yrange=None):
-    """Applies repetitive styling to a given axis."""
+def prepare_hist(h, name, normalise):
+    """Returns a drawable copy of h; the original is never modified.
+
+    The copy is optionally normalised to unit area, and bins with zero or
+    negative content are replaced with NaN so they are not plotted.
+    """
+    d = h.Clone(name)
+    d.SetDirectory(0)  # Detach from ROOT's current directory (avoids name-clash warnings)
+
+    if normalise and h.Integral() > 0:
+
+        # Make sure errors are stored so they scale with the content
+        if d.GetSumw2N() == 0:
+            d.Sumw2()
+
+        d.Scale(1.0 / h.Integral())
+
+    for b in range(1, d.GetNbinsX() + 1):
+        if d.GetBinContent(b) <= 0:
+            d.SetBinContent(b, float("nan"))
+            d.SetBinError(b, 0.0)
+
+    return d
+
+
+def apply_common_axes_style(ax, args, xlabel=None, ylabel=None, yrange=None, logy=None):
+    """Applies repetitive styling to a given axis.
+
+    logy=None follows --logy; pass logy=False to force a linear y-axis (e.g. ratio panel).
+    """
 
     # Set axis labels and titles, using defaults if not overridden
     font_kw = {"fontsize": args.label_size} if args.label_size else {}
@@ -27,11 +64,13 @@ def apply_common_axes_style(ax, args, xlabel=None, ylabel=None, yrange=None):
     if ylabel:
         ax.set_ylabel(ylabel, loc="top", **font_kw)
 
+    use_logy = args.logy if logy is None else logy
+
     if args.logx:
         ax.set_xscale("log")
-    if args.logy:
+    if use_logy:
         ax.set_yscale("log")
-    if args.xrange:
+    if args.xrange and args.splitx is None:
         ax.set_xlim(*args.xrange)
     if yrange:
         ax.set_ylim(*yrange)
@@ -45,50 +84,89 @@ def plot_single(filename, hist_path, args):
     if not hist:
         return
 
-    # Determine whether to normalise the histogram and prepare it for plotting
-    # Create a clone of the histogram to avoid modifying the original
-    draw_hist = hist.Clone(hist.GetName() + "_norm") if args.normalise and hist.Integral() > 0 else hist
+    # Drawable copy: normalised if requested, empty bins masked (original untouched)
+    draw_hist = prepare_hist(hist, hist.GetName() + "_draw", args.normalise)
 
-    # If normalisation is requested, scale the histogram to unit area
-    if args.normalise and hist.Integral() > 0:
-        draw_hist.Scale(1.0 / draw_hist.Integral())
-
-    # Create the figure and axis for plotting
-    fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
-
-    # Format the legend label with statistics if requested
+    # Format the legend label with statistics (computed from the original histogram)
     lbl = pf.format_stats_label(hist, args.label1, args.stats, args.stat_errors)
 
-    # Plot the histogram
-    hep.histplot(draw_hist, ax=ax, color=COLOURS[0], marker=MARKERS[0], label=lbl, **PLOT_KWARGS)
-
-    # Set the title and axis labels, using defaults from the histogram if not provided
+    # Set font sizes for titles and labels if specified
     title_kw = {"fontsize": args.title_size} if args.title_size else {}
+    label_kw = {"fontsize": args.label_size} if args.label_size else {}
 
-    # Set the title if not suppressed
-    if not args.no_title:
-        # pad=15 pushes the title up so it doesn't overlap the loc="top" y-axis label
-        ax.set_title(args.title1 or hist.GetTitle(), pad=15, **title_kw)
+    # Determine global X limits (fallback to histogram limits if args.xrange isn't passed)
+    xmin = args.xrange[0] if args.xrange else hist.GetXaxis().GetXmin()
+    xmax = args.xrange[1] if args.xrange else hist.GetXaxis().GetXmax()
 
-    # Apply common styling to the axes, including labels and ranges
-    apply_common_axes_style(
-        ax, args,
-        xlabel=args.xlabel1 or hist.GetXaxis().GetTitle() or "Variable",
-        ylabel=args.ylabel1 or hist.GetYaxis().GetTitle() or "Events / Bin",
-        yrange=args.yrange1
-    )
+    stem = os.path.basename(hist_path.strip("/"))
 
-    # loc="best" forces matplotlib to find an empty corner for the legend
-    ax.legend(frameon=True, fontsize=args.legend_size, loc="best")
+    # ===== Split X-Axis Layout =====
+    if args.splitx is not None:
+
+        # Create a figure with two vertically stacked subplots for the split X-axis layout
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), layout="constrained")
+
+        # Plot the exact same histogram on BOTH axes
+        hep.histplot(draw_hist, ax=ax1, color=COLOURS[0], marker=MARKERS[0], label=lbl,
+                     linestyle="-" if args.connect else "None", **PLOT_KWARGS)
+        hep.histplot(draw_hist, ax=ax2, color=COLOURS[0], marker=MARKERS[0],
+                     linestyle="-" if args.connect else "None", **PLOT_KWARGS)  # No label to avoid duplicate legend
+
+        # Set the title for the upper panel if not suppressed
+        if not args.no_title:
+            ax1.set_title(args.title1 or hist.GetTitle(), pad=15, **title_kw)
+
+        # Apply the X-axis split
+        ax1.set_xlim(xmin, args.splitx)
+        ax2.set_xlim(args.splitx, xmax)
+
+        # Apply common styling to both panels (yrange1 = upper, yrange2 = lower)
+        apply_common_axes_style(ax1, args, yrange=args.yrange1)
+        apply_common_axes_style(ax2, args,
+                                xlabel=args.xlabel1 or hist.GetXaxis().GetTitle() or "Variable",
+                                yrange=args.yrange2)
+
+        # Manually add Y-labels to both panels
+        ylabel = args.ylabel1 or hist.GetYaxis().GetTitle() or "Events / Bin"
+        ax1.set_ylabel(ylabel, loc="top", **label_kw)
+        ax2.set_ylabel(ylabel, loc="top", **label_kw)
+
+        # Legend on the upper panel only
+        ax1.legend(frameon=True, fontsize=args.legend_size, loc="best")
+
+        stem += "_splitx"
+
+    # ===== Standard Single Layout =====
+    else:
+
+        # Create a single panel for the histogram
+        fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
+
+        # Draw the histogram using mplhep's histplot function with the specified styling
+        hep.histplot(draw_hist, ax=ax, color=COLOURS[0], marker=MARKERS[0], label=lbl,
+                     linestyle="-" if args.connect else "None", **PLOT_KWARGS)
+
+        # Set the title for the plot if not suppressed
+        if not args.no_title:
+            ax.set_title(args.title1 or hist.GetTitle(), pad=15, **title_kw)
+
+        # Apply common styling to the axes, including titles, labels, ranges, and scales
+        apply_common_axes_style(ax, args,
+                                xlabel=args.xlabel1 or hist.GetXaxis().GetTitle() or "Variable",
+                                ylabel=args.ylabel1 or hist.GetYaxis().GetTitle() or "Events / Bin",
+                                yrange=args.yrange1)
+
+        # Add legend to the plot
+        ax.legend(frameon=True, fontsize=args.legend_size, loc="best")
 
     # Save the plot to the specified output directory with the appropriate filename
-    stem = os.path.basename(hist_path.strip("/"))
     if args.normalise:
         stem += "_norm"
     if args.logx:
         stem += "_logx"
     if args.logy:
         stem += "_logy"
+
     pf.save_plot(fig, args.output, stem, args.formats)
 
 
@@ -103,19 +181,11 @@ def plot_comparison(args):
     if not h1 or not h2:
         return
 
-    # Determine whether to normalise the histograms and prepare them for plotting
-    # Create clones of the histograms to avoid modifying the originals
-    draw_h1 = h1.Clone("h1_norm") if args.normalise and h1.Integral() > 0 else h1
-    draw_h2 = h2.Clone("h2_norm") if args.normalise and h2.Integral() > 0 else h2
+    # Drawable copies: normalised if requested, empty bins masked (originals untouched)
+    draw_h1 = prepare_hist(h1, "h1_draw", args.normalise)
+    draw_h2 = prepare_hist(h2, "h2_draw", args.normalise)
 
-    # If normalisation is requested, scale both histograms to unit area
-    if args.normalise:
-        if h1.Integral() > 0:
-            draw_h1.Scale(1.0 / draw_h1.Integral())
-        if h2.Integral() > 0:
-            draw_h2.Scale(1.0 / draw_h2.Integral())
-
-    # Format the legend labels for both histograms, including statistics if requested
+    # Format the legend labels for both histograms (statistics come from the originals)
     lbl1 = pf.format_stats_label(h1, args.label1, args.stats, args.stat_errors)
     lbl2 = pf.format_stats_label(h2, args.label2, args.stats, args.stat_errors)
 
@@ -126,16 +196,64 @@ def plot_comparison(args):
     # Determine the base filename stem for saving the plot, based on the input histogram paths
     stem = f"{os.path.basename(args.histogram_path1)}_vs_{os.path.basename(args.histogram_path2)}"
 
+    # Warn when --ratio will be ignored
+    if args.ratio and args.splitx is not None:
+        print("Note: --ratio is ignored when --splitx is used.")
+    elif args.ratio and args.layout == "side-by-side":
+        print("Note: --ratio is ignored with --layout side-by-side.")
+    elif args.ratio and args.yaxes == "separate":
+        print("Note: --ratio needs --yaxes shared; ignoring --ratio.")
+
+    # ===== Layout 0: Split X-Axis (both histograms overlaid on each panel) =====
+    # Note: this uses a shared y-axis per panel, so --yaxes separate and --ratio are ignored here.
+    if args.splitx is not None:
+
+        xmin = args.xrange[0] if args.xrange else h1.GetXaxis().GetXmin()
+        xmax = args.xrange[1] if args.xrange else h1.GetXaxis().GetXmax()
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), layout="constrained")
+
+        # Plot both histograms on both panels; only the upper panel carries legend labels
+        for ax, labelled in ((ax1, True), (ax2, False)):
+            kw1 = dict(PLOT_KWARGS, **({"label": lbl1} if labelled else {}))
+            kw2 = dict(PLOT_KWARGS, **({"label": lbl2} if labelled else {}))
+            hep.histplot(draw_h1, ax=ax, color=COLOURS[0], marker=MARKERS[0],
+                         linestyle="-" if args.connect else "None", **kw1)
+            hep.histplot(draw_h2, ax=ax, color=COLOURS[1], marker=MARKERS[1],
+                         linestyle="-" if args.connect else "None", **kw2)
+
+        if not args.no_title:
+            ax1.set_title(args.title1 or f"{h1.GetTitle()} & {h2.GetTitle()}", pad=15, **title_kw)
+
+        ax1.set_xlim(xmin, args.splitx)
+        ax2.set_xlim(args.splitx, xmax)
+
+        # Apply common styling to both panels (yrange1 = upper, yrange2 = lower)
+        apply_common_axes_style(ax1, args, yrange=args.yrange1)
+        apply_common_axes_style(ax2, args,
+                                xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable",
+                                yrange=args.yrange2)
+
+        ylabel = args.ylabel1 or h1.GetYaxis().GetTitle() or "Events / Bin"
+        ax1.set_ylabel(ylabel, loc="top", **label_kw)
+        ax2.set_ylabel(ylabel, loc="top", **label_kw)
+
+        ax1.legend(frameon=True, fontsize=args.legend_size, loc="best")
+
+        stem += "_splitx"
+
     # ===== Layout 1: Side-by-Side Panels =====
-    if args.layout == "side-by-side":
+    elif args.layout == "side-by-side":
 
         # Create a figure with two subplots, sharing the y-axis if requested
         share_y = (args.yaxes == "shared")
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), sharey=share_y, layout="constrained")
 
         # Plot the histograms on their respective axes
-        hep.histplot(draw_h1, ax=ax1, color=COLOURS[0], marker=MARKERS[0], label=lbl1, **PLOT_KWARGS)
-        hep.histplot(draw_h2, ax=ax2, color=COLOURS[1], marker=MARKERS[1], label=lbl2, **PLOT_KWARGS)
+        hep.histplot(draw_h1, ax=ax1, color=COLOURS[0], marker=MARKERS[0], label=lbl1,
+                     linestyle="-" if args.connect else "None", **PLOT_KWARGS)
+        hep.histplot(draw_h2, ax=ax2, color=COLOURS[1], marker=MARKERS[1], label=lbl2,
+                     linestyle="-" if args.connect else "None", **PLOT_KWARGS)
 
         # Set titles for each subplot if not suppressed
         if not args.no_title:
@@ -152,7 +270,7 @@ def plot_comparison(args):
         apply_common_axes_style(
             ax2, args,
             xlabel=args.xlabel2 or h2.GetXaxis().GetTitle() or "Variable",
-            ylabel=args.ylabel2 or h2.GetYaxis().GetTitle() or "Events / Bin" if not share_y else None,
+            ylabel=(args.ylabel2 or h2.GetYaxis().GetTitle() or "Events / Bin") if not share_y else None,
             yrange=args.yrange1 if share_y else args.yrange2
         )
 
@@ -164,53 +282,97 @@ def plot_comparison(args):
 
     # ===== Layout 2: Single Overlay =====
     else:
-        # Create a single figure and axis for overlaying both histograms
-        fig, ax1 = plt.subplots(figsize=(8, 6), layout="constrained")
 
-        # Set the title for the overlay plot if not suppressed
+        # The ratio panel is only available with a shared y-axis
+        show_lower = args.ratio and args.yaxes != "separate"
+
+        if show_lower:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), sharex=True,
+                                           gridspec_kw={"height_ratios": [3, 1]}, layout="constrained")
+
+        # If ratio is not requested, create a single panel for overlaying the histograms
+        else:
+            fig, ax1 = plt.subplots(figsize=(8, 6), layout="constrained")
+            ax2 = None
+
+        # Set the title for the main plot if not suppressed
         if not args.no_title:
             ax1.set_title(args.title1 or f"{h1.GetTitle()} & {h2.GetTitle()}", pad=15, **title_kw)
 
-        # If the user requested separate y-axes
+        # If the user requested separate y-axes (twin axes)
         if args.yaxes == "separate":
 
-            # Create a twin axis sharing the same x-axis for the second histogram
-            ax2 = ax1.twinx()
+            # Create a twin y-axis for the second histogram
+            ax_twin = ax1.twinx()
 
-            # Plot both histograms on their respective axes with different colors and markers
-            hep.histplot(draw_h1, ax=ax1, color=COLOURS[0], marker=MARKERS[0], label=lbl1, **PLOT_KWARGS)
-            hep.histplot(draw_h2, ax=ax2, color=COLOURS[1], marker=MARKERS[1], label=lbl2, **PLOT_KWARGS)
+            # Plot the histograms on their respective axes
+            hep.histplot(draw_h1, ax=ax1, color=COLOURS[0], marker=MARKERS[0], label=lbl1,
+                         linestyle="-" if args.connect else "None", **PLOT_KWARGS)
+            hep.histplot(draw_h2, ax=ax_twin, color=COLOURS[1], marker=MARKERS[1], label=lbl2,
+                         linestyle="-" if args.connect else "None", **PLOT_KWARGS)
 
             # Apply common styling to both axes, including labels and ranges
             apply_common_axes_style(ax1, args, xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable", yrange=args.yrange1)
-            apply_common_axes_style(ax2, args, yrange=args.yrange2)
+            apply_common_axes_style(ax_twin, args, yrange=args.yrange2)
 
-            # Set y-axis labels and colors for both axes, using defaults if not provided
+            # Set y-axis labels for both axes, using defaults from the histograms if not provided
             ax1.set_ylabel(args.ylabel1 or h1.GetYaxis().GetTitle() or "Events / Bin", color=COLOURS[0], loc="top", **label_kw)
-            ax2.set_ylabel(args.ylabel2 or h2.GetYaxis().GetTitle() or "Events / Bin", color=COLOURS[1], loc="top", **label_kw)
-            ax1.tick_params(axis="y", labelcolor=COLOURS[0])
-            ax2.tick_params(axis="y", labelcolor=COLOURS[1])
+            ax_twin.set_ylabel(args.ylabel2 or h2.GetYaxis().GetTitle() or "Events / Bin", color=COLOURS[1], loc="top", **label_kw)
 
-            # Combine legends from both axes into a single legend on the first axis
+            # Set the tick label colours
+            ax1.tick_params(axis="y", labelcolor=COLOURS[0])
+            ax_twin.tick_params(axis="y", labelcolor=COLOURS[1])
+
+            # Combine legends from both axes into a single legend on the main axis
             h_1, l_1 = ax1.get_legend_handles_labels()
-            h_2, l_2 = ax2.get_legend_handles_labels()
+            h_2, l_2 = ax_twin.get_legend_handles_labels()
             ax1.legend(h_1 + h_2, l_1 + l_2, frameon=True, fontsize=args.legend_size, loc="best")
 
-        # Otherwise, if the user requested a shared y-axis, plot both histograms on the same axis
+        # Standard shared y-axis with optional Ratio panel
         else:
 
-            # Plot both histograms on the same axis with different colors and markers
-            hep.histplot(draw_h1, ax=ax1, color=COLOURS[0], marker=MARKERS[0], label=lbl1, **PLOT_KWARGS)
-            hep.histplot(draw_h2, ax=ax1, color=COLOURS[1], marker=MARKERS[1], label=lbl2, **PLOT_KWARGS)
+            # Plot both histograms on the same axis
+            hep.histplot(draw_h1, ax=ax1, color=COLOURS[0], marker=MARKERS[0], label=lbl1,
+                         linestyle="-" if args.connect else "None", **PLOT_KWARGS)
+            hep.histplot(draw_h2, ax=ax1, color=COLOURS[1], marker=MARKERS[1], label=lbl2,
+                         linestyle="-" if args.connect else "None", **PLOT_KWARGS)
 
-            # Apply common styling to the shared axis, including labels and ranges
-            apply_common_axes_style(
-                ax1, args,
-                xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable",
-                ylabel=args.ylabel1 or h1.GetYaxis().GetTitle() or "Events / Bin",
-                yrange=args.yrange1
-            )
+            # Only label the x-axis on the main plot if there is no ratio plot
+            main_xlabel = None if show_lower else (args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable")
+            apply_common_axes_style(ax1, args, xlabel=main_xlabel,
+                                    ylabel=args.ylabel1 or h1.GetYaxis().GetTitle() or "Events / Bin",
+                                    yrange=args.yrange1)
             ax1.legend(frameon=True, fontsize=args.legend_size, loc="best")
+
+            # Draw the ratio panel
+            if show_lower:
+
+                # Plain ratio Hist1 / Hist2; ROOT propagates the statistical errors
+                h_ratio = draw_h1.Clone("h_ratio")
+                h_ratio.SetDirectory(0)
+                h_ratio.Divide(draw_h2)
+
+                # Mask bins where either histogram is empty, non-positive, or NaN
+                for b in range(1, h_ratio.GetNbinsX() + 1):
+                    c1 = draw_h1.GetBinContent(b)
+                    c2 = draw_h2.GetBinContent(b)
+
+                    if c1 != c1 or c2 != c2 or c1 <= 0 or c2 <= 0:
+                        h_ratio.SetBinContent(b, float("nan"))
+                        h_ratio.SetBinError(b, 0.0)
+
+                hep.histplot(h_ratio, ax=ax2, color="black", marker="o",
+                             linestyle="-" if args.connect else "none", **PLOT_KWARGS)
+
+                # Baseline reference at ratio = 1
+                ax2.axhline(1.0, color="black", linestyle="--", alpha=0.5, linewidth=1.2)
+
+                # Ratio axis stays linear even when --logy is set for the main panel
+                apply_common_axes_style(ax2, args, xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable",
+                                        yrange=args.yrange2 or (0.5, 1.5), logy=False)
+                ax2.set_ylabel("Offline / Truth", loc="center", **label_kw)
+
+                stem += "_ratio"
 
     # Save the plot to the specified output directory with the appropriate filename
     if args.normalise:
@@ -247,14 +409,20 @@ def parse_args():
     parser.add_argument("--no-title", action="store_true", help="Omit plot titles")
 
     parser.add_argument("--xrange", type=float, nargs=2, default=None, metavar=("MIN", "MAX"))
-    parser.add_argument("--yrange1", type=float, nargs=2, default=None, metavar=("MIN", "MAX"))
-    parser.add_argument("--yrange2", type=float, nargs=2, default=None, metavar=("MIN", "MAX"))
+    parser.add_argument("--yrange1", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
+                        help="Y range for plot 1 (upper panel when using --splitx)")
+    parser.add_argument("--yrange2", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
+                        help="Y range for plot 2 (lower panel when using --splitx, ratio panel when using --ratio)")
     parser.add_argument("-lx", "--logx", action="store_true", default=False)
     parser.add_argument("-ly", "--logy", action="store_true", default=False)
 
     parser.add_argument("--normalise", action="store_true", default=False, help="Normalise histograms to unit area")
     parser.add_argument("--layout", choices=["overlay", "side-by-side"], default="overlay")
     parser.add_argument("--yaxes", choices=["separate", "shared"], default="separate")
+
+    parser.add_argument("--splitx", type=float, default=None, help="X-axis value at which to split the graph vertically (upper panel for x < split, lower panel for x > split).")
+    parser.add_argument("--connect", action="store_true", help="Draw lines connecting the data points.")
+    parser.add_argument("--ratio", action="store_true", help="Draw a ratio plot (Hist1 / Hist2) in a lower panel. Only applies to overlay layout with --yaxes shared.")
 
     parser.add_argument(
         "--stats", nargs="*", default=["entries", "mean", "std"],
@@ -283,7 +451,7 @@ if __name__ == "__main__":
         paths = pf.find_all_histograms(args.filename1, args.directory)
         print(f"Found {len(paths)} histograms in '{args.directory}'")
 
-        # If no histograms are found, print a message and exit
+        # Plot each histogram found
         for p in paths:
             plot_single(args.filename1, p, args)
 

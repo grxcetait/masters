@@ -5,15 +5,19 @@ Uses RDataFrame for fast C++ event loops and matplotlib/mplhep for plotting.
 """
 
 import argparse
-import os
+import sys
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import mplhep as hep
 import ROOT as root
-import plotting_functions as pf
 
-# Standard ATLAS styling and batch mode
-hep.style.use("ATLAS")
-root.gROOT.SetBatch(True)
+# Path routing to allow importing from the utils directory
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root))
+
+# Import custom plotting functions from the utils module (this also sets the ATLAS style and ROOT batch mode)
+import utils.plotting_functions as pf
 
 # Aesthetic properties for thin lines and clean caps
 PLOT_KWARGS = {
@@ -55,7 +59,7 @@ def find_branches(df, prefix, requested_suffixes):
 
                 # Add the suffix and full branch name to the dictionary
                 branches[suffix] = n
-                
+
     return branches
 
 
@@ -71,9 +75,14 @@ def plot_histogram(hist, default_xlabel, default_ylabel, default_title, stem, ar
 
     # If normalisation is requested, scale the histogram to unit area and adjust the Y-axis label accordingly
     if args.normalise and hist.Integral() > 0:
+
+        # Make sure errors are stored so they scale with the content
+        if hist.GetSumw2N() == 0:
+            hist.Sumw2()
+
         hist.Scale(1.0 / hist.Integral())
         if not args.ylabel:
-            ylabel = "Fraction of Tracks"
+            ylabel = "Fraction of Entries"
 
     # Create a new figure and axis for the plot
     fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
@@ -81,8 +90,13 @@ def plot_histogram(hist, default_xlabel, default_ylabel, default_title, stem, ar
     # Format the legend label with statistics if requested
     lbl = pf.format_stats_label(hist, label=args.label, stats_choices=args.stats, stat_errors=args.stat_errors)
 
-    # Draw the histogram using mplhep's histplot function with the specified styling
-    hep.histplot(hist, ax=ax, color="black", marker="o", label=lbl, **PLOT_KWARGS)
+    # adjust plotting kwargs based on the --connect argument
+    plot_args = PLOT_KWARGS.copy()
+    if args.connect:
+        plot_args["linestyle"] = "-"   # Connects the points with a solid line
+
+    # Draw the histogram using mplhep's histplot function
+    hep.histplot(hist, ax=ax, color="black", marker="o", label=lbl, **plot_args)
 
     # Apply common styling to the axes, including titles, labels, ranges, and scales
     title_kw = {"fontsize": args.title_size} if args.title_size else {}
@@ -107,7 +121,7 @@ def plot_histogram(hist, default_xlabel, default_ylabel, default_title, stem, ar
     if args.logy:
         ax.set_yscale("log")
 
-    # Add a legend 
+    # Add a legend
     ax.legend(frameon=True, fontsize=args.legend_size, loc="best")
 
     # Save the plot to the specified output directory with the appropriate filename
@@ -130,14 +144,14 @@ def parse_args():
     parser.add_argument("-t", "--tree", default="Events", help="Name of the TTree (default: Events).")
     parser.add_argument("-p", "--prefix", default="HLTTrack_", help="Branch prefix to search for (default: HLTTrack_).")
     parser.add_argument("-o", "--output", default="hlt_tracks", help="Output subfolder inside outputs/.")
-    
+
     parser.add_argument("--max-events", type=int, default=None, help="Maximum events to process.")
     parser.add_argument("--threads", type=int, default=4, help="Number of threads for RDataFrame.")
-    
+
     # What to plot
     parser.add_argument("-s", "--suffixes", nargs="*", default=[], help="Specific suffixes to plot (e.g., pt eta phi). Pass 'all' to plot everything.")
     parser.add_argument("--multiplicity", action="store_true", help="Include the track multiplicity plot.")
-    
+
     # Custom Labels, Titles, and Limits
     parser.add_argument("--title", type=str, default=None, help="Override the plot title.")
     parser.add_argument("--xlabel", type=str, default=None, help="Override the X-axis label.")
@@ -145,7 +159,7 @@ def parse_args():
     parser.add_argument("-l", "--label", default=None, help="Legend header label.")
     parser.add_argument("--xrange", nargs=2, type=float, metavar=("MIN", "MAX"), help="Force X-axis limits (min max)")
     parser.add_argument("--yrange", nargs=2, type=float, metavar=("MIN", "MAX"), help="Force Y-axis limits (min max)")
-    
+
     # Formatting & Customization
     parser.add_argument("--title-size", type=float, default=None, help="Font size for plot titles")
     parser.add_argument("--label-size", type=float, default=None, help="Font size for axis labels")
@@ -154,7 +168,8 @@ def parse_args():
     parser.add_argument("-lx", "--logx", action="store_true", help="Force log-x scale on ALL plots")
     parser.add_argument("-ly", "--logy", action="store_true", help="Force log-y scale on ALL plots")
     parser.add_argument("--normalise", action="store_true", help="Normalise all histograms to unit area")
-    
+    parser.add_argument("--connect", action="store_true", help="Draw lines connecting the data points.")
+
     # Stats and Formats
     parser.add_argument(
         "--stats", nargs="*", default=["entries", "mean", "std"],
@@ -176,7 +191,7 @@ def main():
     args = parse_args()
 
     # Enable multi-threading if requested and no max events limit is set
-    if args.threads > 0 and args.max_events is None:3
+    if args.threads > 0 and args.max_events is None:
         root.ROOT.EnableImplicitMT(args.threads)
         print(f"Using {args.threads} threads for processing.")
 
@@ -216,10 +231,10 @@ def main():
 
             # Add the multiplicity histogram to the queue with default labels and titles
             histogram_queue.append((
-                h_mult, 
-                "Number of Tracks", 
-                "Events", 
-                f"{args.prefix} Multiplicity", 
+                h_mult,
+                "Number of Tracks",
+                "Events",
+                f"{args.prefix} Multiplicity",
                 f"{args.prefix.strip('_').lower()}_multiplicity"
             ))
 
@@ -243,14 +258,14 @@ def main():
 
             # Add the histogram to the queue with default labels and titles
             histogram_queue.append((
-                h, 
-                suffix,           
-                "Tracks / Bin",   
-                f"{args.prefix}{suffix}", 
-                f"{args.prefix.strip('_').lower()}_{suffix}" 
+                h,
+                suffix,
+                "Tracks / Bin",
+                f"{args.prefix}{suffix}",
+                f"{args.prefix.strip('_').lower()}_{suffix}"
             ))
 
-    # If no histograms were queued for plotting, print a message and exit
+    # If no histograms were queued for plotting, print a message and exit
     if not histogram_queue:
         print("Nothing to plot! Use '--multiplicity' or specify branches.")
         return
