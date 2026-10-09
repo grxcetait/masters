@@ -21,7 +21,7 @@ PLOT_KWARGS = {
     "histtype": "errorbar",
     "markersize": 4,
     "elinewidth": 1.2,
-    "capsize": 2,
+    "capsize": 2
 }
 
 
@@ -348,9 +348,9 @@ def plot_comparison(args):
             if show_lower:
 
                 # Plain ratio Hist1 / Hist2; ROOT propagates the statistical errors
-                h_ratio = draw_h1.Clone("h_ratio")
+                h_ratio = draw_h2.Clone("h_ratio")
                 h_ratio.SetDirectory(0)
-                h_ratio.Divide(draw_h2)
+                h_ratio.Divide(draw_h1)
 
                 # Mask bins where either histogram is empty, non-positive, or NaN
                 for b in range(1, h_ratio.GetNbinsX() + 1):
@@ -370,7 +370,7 @@ def plot_comparison(args):
                 # Ratio axis stays linear even when --logy is set for the main panel
                 apply_common_axes_style(ax2, args, xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable",
                                         yrange=args.yrange2 or (0.5, 1.5), logy=False)
-                ax2.set_ylabel("Offline / Truth", loc="center", **label_kw)
+                ax2.set_ylabel(ylabel=args.ylabel2 or "Hist 2 / Hist 1", loc="center", **label_kw)
 
                 stem += "_ratio"
 

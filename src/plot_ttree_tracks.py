@@ -18,6 +18,7 @@ sys.path.append(str(project_root))
 
 # Import custom plotting functions from the utils module (this also sets the ATLAS style and ROOT batch mode)
 import utils.plotting_functions as pf
+import utils.navigating_ttrees as nt
 
 # Aesthetic properties for thin lines and clean caps
 PLOT_KWARGS = {
@@ -26,41 +27,6 @@ PLOT_KWARGS = {
     "elinewidth": 1.2,
     "capsize": 2
 }
-
-# ========================== Inspecting the file ==========================
-
-def find_branches(df, prefix, requested_suffixes):
-    """
-    Returns a dictionary of branch names matching the prefix.
-    If 'all' is in requested_suffixes, it returns all matching branches.
-    Otherwise, it strictly filters to the requested suffixes.
-    """
-
-    # If the user didn't ask for any suffixes, return empty
-    if not requested_suffixes:
-        return {}
-
-    # Get all column names from the RDataFrame and filter by prefix
-    names = [str(n) for n in df.GetColumnNames()]
-    branches = {}
-    plot_all = "all" in requested_suffixes
-
-    # Loop through the column names and check for matches with the prefix
-    for n in names:
-
-        # If the column name starts with the prefix, extract the suffix
-        if n.startswith(prefix):
-
-            # Extract the suffix by removing the prefix from the column name
-            suffix = n[len(prefix):]
-
-            # If the user requested all branches or this specific suffix, add it to the dictionary
-            if plot_all or suffix in requested_suffixes:
-
-                # Add the suffix and full branch name to the dictionary
-                branches[suffix] = n
-
-    return branches
 
 
 # ========================== Plotting ==========================
@@ -243,7 +209,7 @@ def main():
             print(f"Warning: Could not find any branch starting with '{args.prefix}' for multiplicity.")
 
     # Find branches with the specified prefix and requested suffixes
-    branches = find_branches(df, args.prefix, args.suffixes)
+    branches = nt.find_branches(df, args.prefix, args.suffixes)
 
     # If any branches were found, create histograms for each and add them to the queue
     if branches:
