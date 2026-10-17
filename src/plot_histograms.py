@@ -50,32 +50,6 @@ def prepare_hist(h, name, normalise):
     return d
 
 
-def apply_common_axes_style(ax, args, xlabel=None, ylabel=None, yrange=None, logy=None):
-    """Applies repetitive styling to a given axis.
-
-    logy=None follows --logy; pass logy=False to force a linear y-axis (e.g. ratio panel).
-    """
-
-    # Set axis labels and titles, using defaults if not overridden
-    font_kw = {"fontsize": args.label_size} if args.label_size else {}
-
-    if xlabel:
-        ax.set_xlabel(xlabel, loc="right", **font_kw)
-    if ylabel:
-        ax.set_ylabel(ylabel, loc="top", **font_kw)
-
-    use_logy = args.logy if logy is None else logy
-
-    if args.logx:
-        ax.set_xscale("log")
-    if use_logy:
-        ax.set_yscale("log")
-    if args.xrange and args.splitx is None:
-        ax.set_xlim(*args.xrange)
-    if yrange:
-        ax.set_ylim(*yrange)
-
-
 def plot_single(filename, hist_path, args):
     """Generates a standard single-histogram plot."""
 
@@ -121,8 +95,8 @@ def plot_single(filename, hist_path, args):
         ax2.set_xlim(args.splitx, xmax)
 
         # Apply common styling to both panels (yrange1 = upper, yrange2 = lower)
-        apply_common_axes_style(ax1, args, yrange=args.yrange1)
-        apply_common_axes_style(ax2, args,
+        pf.apply_common_axes_style(ax1, args, yrange=args.yrange1)
+        pf.apply_common_axes_style(ax2, args,
                                 xlabel=args.xlabel1 or hist.GetXaxis().GetTitle() or "Variable",
                                 yrange=args.yrange2)
 
@@ -151,7 +125,7 @@ def plot_single(filename, hist_path, args):
             ax.set_title(args.title1 or hist.GetTitle(), pad=15, **title_kw)
 
         # Apply common styling to the axes, including titles, labels, ranges, and scales
-        apply_common_axes_style(ax, args,
+        pf.apply_common_axes_style(ax, args,
                                 xlabel=args.xlabel1 or hist.GetXaxis().GetTitle() or "Variable",
                                 ylabel=args.ylabel1 or hist.GetYaxis().GetTitle() or "Events / Bin",
                                 yrange=args.yrange1)
@@ -229,8 +203,8 @@ def plot_comparison(args):
         ax2.set_xlim(args.splitx, xmax)
 
         # Apply common styling to both panels (yrange1 = upper, yrange2 = lower)
-        apply_common_axes_style(ax1, args, yrange=args.yrange1)
-        apply_common_axes_style(ax2, args,
+        pf.apply_common_axes_style(ax1, args, yrange=args.yrange1)
+        pf.apply_common_axes_style(ax2, args,
                                 xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable",
                                 yrange=args.yrange2)
 
@@ -261,13 +235,13 @@ def plot_comparison(args):
             ax2.set_title(args.title2 or h2.GetTitle(), pad=15, **title_kw)
 
         # Apply common styling to both axes, including labels and ranges
-        apply_common_axes_style(
+        pf.apply_common_axes_style(
             ax1, args,
             xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable",
             ylabel=args.ylabel1 or h1.GetYaxis().GetTitle() or "Events / Bin",
             yrange=args.yrange1
         )
-        apply_common_axes_style(
+        pf.apply_common_axes_style(
             ax2, args,
             xlabel=args.xlabel2 or h2.GetXaxis().GetTitle() or "Variable",
             ylabel=(args.ylabel2 or h2.GetYaxis().GetTitle() or "Events / Bin") if not share_y else None,
@@ -312,8 +286,8 @@ def plot_comparison(args):
                          linestyle="-" if args.connect else "None", **PLOT_KWARGS)
 
             # Apply common styling to both axes, including labels and ranges
-            apply_common_axes_style(ax1, args, xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable", yrange=args.yrange1)
-            apply_common_axes_style(ax_twin, args, yrange=args.yrange2)
+            pf.apply_common_axes_style(ax1, args, xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable", yrange=args.yrange1)
+            pf.apply_common_axes_style(ax_twin, args, yrange=args.yrange2)
 
             # Set y-axis labels for both axes, using defaults from the histograms if not provided
             ax1.set_ylabel(args.ylabel1 or h1.GetYaxis().GetTitle() or "Events / Bin", color=COLOURS[0], loc="top", **label_kw)
@@ -339,7 +313,7 @@ def plot_comparison(args):
 
             # Only label the x-axis on the main plot if there is no ratio plot
             main_xlabel = None if show_lower else (args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable")
-            apply_common_axes_style(ax1, args, xlabel=main_xlabel,
+            pf.apply_common_axes_style(ax1, args, xlabel=main_xlabel,
                                     ylabel=args.ylabel1 or h1.GetYaxis().GetTitle() or "Events / Bin",
                                     yrange=args.yrange1)
             ax1.legend(frameon=True, fontsize=args.legend_size, loc="best")
@@ -368,7 +342,7 @@ def plot_comparison(args):
                 ax2.axhline(1.0, color="black", linestyle="--", alpha=0.5, linewidth=1.2)
 
                 # Ratio axis stays linear even when --logy is set for the main panel
-                apply_common_axes_style(ax2, args, xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable",
+                pf.apply_common_axes_style(ax2, args, xlabel=args.xlabel1 or h1.GetXaxis().GetTitle() or "Variable",
                                         yrange=args.yrange2 or (0.5, 1.5), logy=False)
                 ax2.set_ylabel(ylabel=args.ylabel2 or "Hist 2 / Hist 1", loc="center", **label_kw)
 

@@ -202,3 +202,29 @@ def save_plot(fig, output_subfolder, stem, formats=("png",)):
         print(f"Saved: {filepath}")
 
     plt.close(fig)
+
+
+def apply_common_axes_style(ax, args, xlabel=None, ylabel=None, yrange=None, logy=None):
+    """Applies repetitive styling to a given axis.
+
+    logy=None follows --logy; pass logy=False to force a linear y-axis (e.g. ratio panel).
+    """
+
+    # Set axis labels and titles, using defaults if not overridden
+    font_kw = {"fontsize": args.label_size} if args.label_size else {}
+
+    if xlabel:
+        ax.set_xlabel(xlabel, loc="right", **font_kw)
+    if ylabel:
+        ax.set_ylabel(ylabel, loc="top", **font_kw)
+
+    use_logy = args.logy if logy is None else logy
+
+    if args.logx:
+        ax.set_xscale("log")
+    if use_logy:
+        ax.set_yscale("log")
+    if args.xrange and args.splitx is None:
+        ax.set_xlim(*args.xrange)
+    if yrange:
+        ax.set_ylim(*yrange)

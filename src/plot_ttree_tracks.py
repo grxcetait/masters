@@ -50,9 +50,6 @@ def plot_histogram(hist, default_xlabel, default_ylabel, default_title, stem, ar
         if not args.ylabel:
             ylabel = "Fraction of Entries"
 
-    # Create a new figure and axis for the plot
-    fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
-
     # Format the legend label with statistics if requested
     lbl = pf.format_stats_label(hist, label=args.label, stats_choices=args.stats, stat_errors=args.stat_errors)
 
@@ -61,36 +58,68 @@ def plot_histogram(hist, default_xlabel, default_ylabel, default_title, stem, ar
     if args.connect:
         plot_args["linestyle"] = "-"   # Connects the points with a solid line
 
-    # Draw the histogram using mplhep's histplot function
-    hep.histplot(hist, ax=ax, color="black", marker="o", label=lbl, **plot_args)
-
     # Apply common styling to the axes, including titles, labels, ranges, and scales
     title_kw = {"fontsize": args.title_size} if args.title_size else {}
     font_kw = {"fontsize": args.label_size} if args.label_size else {}
+    label_kw = {"fontsize": args.label_size} if args.label_size else {}
 
-    # Set the title if not suppressed by the user, with optional font size
-    if not args.no_title:
-        ax.set_title(title, pad=15, **title_kw)
+    # Determine global x-limits but fallback to the histogram limits if args.xrange isn't passed
+    xmin = args.xrange[0] if args.xrange else hist.GetXaxis().GetXmin()
+    xmax = args.xrange[1] if args.xrange else hist.GetXaxis().GetXmax()
 
-    # Set the X and Y axis labels with optional font sizes
-    ax.set_xlabel(xlabel, loc="right", **font_kw)
-    ax.set_ylabel(ylabel, loc="top", **font_kw)
+    # ===== Split X-Axis Layout =====
+    if args.splitx is not None:
+ 
+        # Create a figure with two vertically stacked subplots for the split X-axis layout
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), layout="constrained")
+ 
+        # Plot the exact same histogram on BOTH axes
+        hep.histplot(hist, ax=ax1, color="black", marker="o", label=lbl, **plot_args)
+        hep.histplot(hist, ax=ax2, color="black", marker="o", **plot_args)  # No label to avoid duplicate legend
+ 
+        # Set the title for the upper panel if not suppressed
+        if not args.no_title:
+            ax1.set_title(title, pad=15, **title_kw)
+ 
+        # Apply the X-axis split
+        ax1.set_xlim(xmin, args.splitx)
+        ax2.set_xlim(args.splitx, xmax)
+ 
+        # Apply common styling to both panels (yrange1 = upper, yrange2 = lower)
+        pf.apply_common_axes_style(ax1, args, yrange=args.yrange1)
+        pf.apply_common_axes_style(ax2, args, xlabel=xlabel, yrange=args.yrange2)
+ 
+        # Manually add Y-labels to both panels
+        ax1.set_ylabel(ylabel, loc="top", **label_kw)
+        ax2.set_ylabel(ylabel, loc="top", **label_kw)
+ 
+        # Legend on the upper panel only
+        ax1.legend(frameon=True, fontsize=args.legend_size, loc="best")
+ 
+        stem += "_splitx"
 
-    # Apply user-specified axis ranges and log scales if requested
-    if args.xrange:
-        ax.set_xlim(args.xrange[0], args.xrange[1])
-    if args.yrange:
-        ax.set_ylim(args.yrange[0], args.yrange[1])
-
-    if args.logx:
-        ax.set_xscale("log")
-    if args.logy:
-        ax.set_yscale("log")
-
-    # Add a legend
-    ax.legend(frameon=True, fontsize=args.legend_size, loc="best")
+     # ===== Standard Single Layout =====
+    else:
+ 
+        # Create a single panel for the histogram
+        fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
+ 
+        # Draw the histogram using mplhep's histplot function
+        hep.histplot(hist, ax=ax, color="black", marker="o", label=lbl, **plot_args)
+ 
+        # Set the title if not suppressed by the user, with optional font size
+        if not args.no_title:
+            ax.set_title(title, pad=15, **title_kw)
+ 
+        # Apply common styling to the axes, including labels, ranges, and scales
+        pf.apply_common_axes_style(ax, args, xlabel=xlabel, ylabel=ylabel, yrange=args.yrange1)
+ 
+        # Add a legend
+        ax.legend(frameon=True, fontsize=args.legend_size, loc="best")
 
     # Save the plot to the specified output directory with the appropriate filename
+    if args.bins:
+        stem += f"_{args.bins}bins"
     if args.normalise:
         stem += "_norm"
     if args.logx:
@@ -98,6 +127,22 @@ def plot_histogram(hist, default_xlabel, default_ylabel, default_title, stem, ar
     if args.logy:
         stem += "_logy"
     pf.save_plot(fig, args.output, stem, args.formats)
+
+
+# ========================== Binning ==========================
+
+def book_histogram(df, column, name, args):
+
+    # If no custom binning is requested, use RDataFrame's default histogram
+    if not args.bins:
+        return df.Histo1D(column)
+
+    # Use the requested x-range, or let ROOT work out the range when none is given
+    xlow, xup = args.xrange if args.xrange else (0.0, 0.0)
+
+    # Build the histogram model with the requested number of bins and book it
+    model = root.RDF.TH1DModel(name, column, args.bins, xlow, xup)
+    return df.Histo1D(model, column)
 
 
 # ========================== Main ==========================
@@ -118,15 +163,22 @@ def parse_args():
     parser.add_argument("-s", "--suffixes", nargs="*", default=[], help="Specific suffixes to plot (e.g., pt eta phi). Pass 'all' to plot everything.")
     parser.add_argument("--multiplicity", action="store_true", help="Include the track multiplicity plot.")
 
+    # Binning
+    parser.add_argument("--bins", type=int, default=None, 
+                        help="Number of bins for the track parameter histograms (default: RDataFrame default). Uses --xrange as the histogram range if given, otherwise the range is set automatically.")
+
     # Custom Labels, Titles, and Limits
     parser.add_argument("--title", type=str, default=None, help="Override the plot title.")
     parser.add_argument("--xlabel", type=str, default=None, help="Override the X-axis label.")
     parser.add_argument("--ylabel", type=str, default=None, help="Override the Y-axis label.")
     parser.add_argument("-l", "--label", default=None, help="Legend header label.")
     parser.add_argument("--xrange", nargs=2, type=float, metavar=("MIN", "MAX"), help="Force X-axis limits (min max)")
-    parser.add_argument("--yrange", nargs=2, type=float, metavar=("MIN", "MAX"), help="Force Y-axis limits (min max)")
+    parser.add_argument("--yrange1", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
+                        help="Y range for plot 1 (upper panel when using --splitx)")
+    parser.add_argument("--yrange2", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
+                        help="Y range for plot 2 (lower panel when using --splitx, ratio panel when using --ratio)")
 
-    # Formatting & Customization
+    # Formatting & Customisation
     parser.add_argument("--title-size", type=float, default=None, help="Font size for plot titles")
     parser.add_argument("--label-size", type=float, default=None, help="Font size for axis labels")
     parser.add_argument("--legend-size", type=float, default=11, help="Font size for legend text")
@@ -134,7 +186,10 @@ def parse_args():
     parser.add_argument("-lx", "--logx", action="store_true", help="Force log-x scale on ALL plots")
     parser.add_argument("-ly", "--logy", action="store_true", help="Force log-y scale on ALL plots")
     parser.add_argument("--normalise", action="store_true", help="Normalise all histograms to unit area")
+
+    parser.add_argument("--splitx", type=float, default=None, help="X-axis value at which to split the graph vertically (upper panel for x < split, lower panel for x > split).")
     parser.add_argument("--connect", action="store_true", help="Draw lines connecting the data points.")
+    parser.add_argument("--ratio", action="store_true", help="Draw a ratio plot (Hist1 / Hist2) in a lower panel. Only applies to overlay layout with --yaxes shared.")
 
     # Stats and Formats
     parser.add_argument(
@@ -219,8 +274,8 @@ def main():
         # Loop through the found branches and create histograms for each
         for suffix, column in branches.items():
 
-            # Create a histogram for the current branch
-            h = df.Histo1D(column)
+            # Create a histogram for the current branch, with the requested binning
+            h = book_histogram(df, column, f"h_{suffix}", args)
 
             # Add the histogram to the queue with default labels and titles
             histogram_queue.append((
