@@ -7,8 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# === ARGUEMENTS ====
-# Folder containing the sumpt, gaussian_weighting and two_steps result folders
+# === ARGUEMENTS ===
 base_dir = "outputs/sem1week4"
 
 # Subfolder for each algorithm
@@ -26,23 +25,37 @@ tolerances = [0.3, 1.0]
 folder_pattern = re.compile(r"^([\d.]+|inf)ptmin_([\d.]+|inf)ptmax_([\d.]+|inf)etamax$")
 
 # Names for the box weights
-weight_names = {0: "track count", 1: "pT", 2: "pT^2"}
+#weight_names = {0: "track count", 1: "pT", 2: "pT^2"}
+#weight_names = {0: "track count"}
+weight_names = {1: "pT"}
 
 # Column names for the cuts
 cut_columns = ["pT min (GeV)", "pT max (GeV)", "|eta| max"]
 
-# ===== FUNCTIONS =====
+# Only read folders with these cuts (np.inf = no cut); leave a cut out to keep all its values
+fixed_cuts = {"pT max (GeV)": np.inf, "|eta| max": np.inf}
+
+# Output file name -> "box_sum_pt_{output_file_name}.csv"
+#output_file_name = "all_cuts"
+#output_file_name = "all_weight_pt_min"
+#output_file_name = "track_count"
+output_file_name = "pT"
 
 
-def find_cut_folders(algorithm_dir):
+# === FUNCTIONS ===
 
-    # Find every subfolder whose name records the cuts, and read the cuts from the name
+def find_folders(algorithm_dir):
+
+    # Empty list to hold folders
     folders = []
 
+    # Check if folder is found
     if not os.path.isdir(algorithm_dir):
         print(f"Not found, skipping: {algorithm_dir}")
         return folders
 
+    # Find every subfolder whose name records the cuts
+    # Read the cuts from the name
     for name in sorted(os.listdir(algorithm_dir)):
 
         match = folder_pattern.match(name)
@@ -53,36 +66,51 @@ def find_cut_folders(algorithm_dir):
                 "pT max (GeV)": float(match.group(2)),
                 "|eta| max": float(match.group(3))}
 
+        # Skip folders whose cuts don't match the fixed ones
+        if any(cuts[col] != value for col, value in fixed_cuts.items()):
+            continue
+
         folders.append((cuts, os.path.join(algorithm_dir, name)))
 
     return folders
 
+def finalise_table(df, sort_columns):
 
-def finish_table(df, sort_columns):
-
-    # Sort the rows, then write infinite cuts as "none" and round the numbers
+    # Sort the rows
     df = df.sort_values(sort_columns).reset_index(drop = True)
 
+    # Write infinite cuts as "none"
     for col in cut_columns:
         df[col] = df[col].apply(lambda x: "none" if np.isinf(x) else f"{x:g}")
 
+    # Drop the cut columns that are fixed, since every row has the same value
+    df = df.drop(columns = [col for col in fixed_cuts if col in df.columns])
+
+    # Round the numbers
     return df.round(3)
 
+def box_sum_pt_table():
 
-def box_table():
-
-    # Read every vertex_scan_summary.csv from the box (sum pT) runs
+    # Empty list to hold rows
     rows = []
 
-    for cuts, folder in find_cut_folders(sumpt_dir):
+    # Read every vertex_scan_summary.csv from the box sum pt runs 
+    for cuts, folder in find_folders(sumpt_dir):
 
         path = os.path.join(folder, "vertex_scan_summary.csv")
         if not os.path.isfile(path):
             continue
 
+        # Read dataframe
         summary = pd.read_csv(path)
 
+        # Loop through rows and obtain data
         for _, r in summary.iterrows():
+    
+            # Only keep the weights listed in weight_names
+            if int(r["power"]) not in weight_names:
+                continue
+
             row = dict(cuts)
             row["Weight"] = weight_names.get(int(r["power"]), f"pT^{int(r['power'])}")
             row["res (mm)"] = r["res"]
@@ -94,28 +122,32 @@ def box_table():
     if not rows:
         return None
 
+    # Turn into a data frame 
     df = pd.DataFrame(rows)
 
-    # Keep the weights in the order count, pT, pT^2 when sorting
+    # Keep the weights in the order count, pT, pT^2 
     df["_weight_order"] = df["Weight"].map({v: k for k, v in weight_names.items()})
-    df = finish_table(df, cut_columns + ["_weight_order", "res (mm)"])
+    df = finalise_table(df, cut_columns + ["_weight_order", "res (mm)"])
 
+    # Return the final df without the weight ordering column
     return df.drop(columns = "_weight_order")
 
+def gaussian_weighting_table():
 
-def gaussian_table():
-
-    # Read every gaussian_scan_summary.csv from the Gaussian weighting runs
+    # Empty list to hold rows
     rows = []
 
-    for cuts, folder in find_cut_folders(gaussian_dir):
+    # Read every gaussian_scan_summary.csv from the gaussian weighting runs 
+    for cuts, folder in find_folders(gaussian_dir):
 
         path = os.path.join(folder, "gaussian_scan_summary.csv")
         if not os.path.isfile(path):
             continue
 
+        # Read dataframe
         summary = pd.read_csv(path)
 
+        # Loop through rows and obtain data 
         for _, r in summary.iterrows():
             row = dict(cuts)
             row["d0 factor"] = "yes" if bool(r["use_d0_weight"]) else "no"
@@ -129,9 +161,11 @@ def gaussian_table():
     if not rows:
         return None
 
+    # Turn into a data frame
     df = pd.DataFrame(rows)
 
-    return finish_table(df, cut_columns + ["d0 factor", "Normalised"])
+    # Finishing touches on the table
+    return finalise_table(df, cut_columns + ["d0 factor", "Normalised"])
 
 
 def select_candidate(score, cand_ntrk):
@@ -142,12 +176,12 @@ def select_candidate(score, cand_ntrk):
     return np.argmax(score, axis = 1)
 
 
-def two_step_table():
+def two_steps_table():
 
     # Recompute the two-step results from the saved candidates in each .npz file
     rows = []
 
-    for cuts, folder in find_cut_folders(two_step_dir):
+    for cuts, folder in find_folders(two_step_dir):
 
         for name in sorted(os.listdir(folder)):
 
@@ -176,10 +210,10 @@ def two_step_table():
 
             # The four ways of choosing a candidate
             selectors = {
-                "Densest": data["cand_height"],
-                "Track count": cand_ntrk.astype(np.float64),
+                #"Densest": data["cand_height"],
+                #"Track count": cand_ntrk.astype(np.float64),
                 "Sum pT": data["cand_sumpt"],
-                "Sum pT^2": data["cand_sumpt2"],
+                #"Sum pT^2": data["cand_sumpt2"],
             }
 
             # Which candidate each selector chooses (same for every tolerance)
@@ -215,10 +249,11 @@ def two_step_table():
     if not rows:
         return None
 
+    # Turn into dataframe
     df = pd.DataFrame(rows)
 
-    return finish_table(df, ["tol (mm)"] + cut_columns + ["s max"])
-
+    # Finishing touches on the table
+    return finalise_table(df, ["tol (mm)"] + cut_columns + ["s max"])
 
 def main():
 
@@ -226,9 +261,9 @@ def main():
     os.makedirs(tables_dir, exist_ok = True)
 
     tables = {
-        "box_sliding_window": box_table(),
-        "gaussian_density": gaussian_table(),
-        "two_step": two_step_table(),
+        "box_sum_pt": box_sum_pt_table(),
+        "gaussian_weighting": gaussian_weighting_table(),
+        "two_steps": two_steps_table()
     }
 
     # Save each table as its own CSV
@@ -238,22 +273,9 @@ def main():
             print(f"No results found for {name}")
             continue
 
-        path = os.path.join(tables_dir, f"{name}.csv")
+        path = os.path.join(tables_dir, f"{name}_{output_file_name}.csv") 
         df.to_csv(path, index = False)
-        print(f"\n===== {name} ({len(df)} rows) =====")
-        print(df.to_string(index = False))
         print(f"Saved: {Path(path).resolve()}")
-
-    # Also save all tables in one Excel file, one sheet per algorithm (needs openpyxl)
-    try:
-        xlsx_path = os.path.join(tables_dir, "all_results.xlsx")
-        with pd.ExcelWriter(xlsx_path) as writer:
-            for name, df in tables.items():
-                if df is not None:
-                    df.to_excel(writer, sheet_name = name[:31], index = False)
-        print(f"\nSaved: {Path(xlsx_path).resolve()}")
-    except ImportError:
-        print("\nopenpyxl not installed, so no Excel file (pip install openpyxl). The CSVs are saved.")
 
 
 if __name__ == "__main__":
