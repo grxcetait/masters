@@ -27,9 +27,9 @@ track_branches = ["HLTTrack_pt", "HLTTrack_eta", "HLTTrack_d0", "HLTTrack_z0",
                   "TruthVertex_isValid"]
 
 # Track selection
-pt_min_values = [1, 1.5]       # [GeV] 
-pt_max_values = [np.inf, 100]    # [GeV] where np.inf = None
-eta_max_values = [2.5, np.inf]  # where np.inf = None
+pt_min_values = [1.5] #[1, 1.5]       # [GeV] 
+pt_max_values = [np.inf] #[np.inf, 100]    # [GeV] where np.inf = None
+eta_max_values = [np.inf] #[2.5, np.inf]  # where np.inf = None
 d0_max = 4.0        # [mm]
 sig_d0_max = 5.0    # [mm]
 sig_z0_max = 10.0   # [mm]
@@ -316,7 +316,7 @@ def main():
                 flat_sig_d0 = ak.to_numpy(ak.flatten(sig_d0[mask])).astype(np.float64)
 
                 # Specify output subfloder
-                output_subfolder = f"sem1week4/two_steps/{pt_min}ptmin_{pt_max}ptmax_{eta_max}etamax"
+                output_subfolder = f"sem1week6/two_steps/{pt_min}ptmin_{pt_max}ptmax_{eta_max}etamax"
 
                 # Create the output directory if it doesn't exist
                 out_dir = os.path.join("outputs", output_subfolder)
@@ -397,12 +397,12 @@ def main():
                         }
                     )
 
-                    filepath = os.path.join(out_dir, f"vertex_candidates_s{s_max}.csv")
+                    filepath = os.path.join(out_dir, f"vertex_candidates_s{s_max}_log.csv")
                     results_df.to_csv(filepath, index = False)
                     print(f"  Saved: {Path(filepath).resolve()}")
 
                     # Save every candidate too, for plots later (e.g. sum pT^2 of truth vs pile-up candidates)
-                    npz_path = os.path.join(out_dir, f"vertex_candidates_s{s_max}.npz")
+                    npz_path = os.path.join(out_dir, f"vertex_candidates_s{s_max}_log.npz")
                     np.savez_compressed(npz_path, cand_z = cand_z, cand_height = cand_height,
                                         cand_ntrk = cand_ntrk, cand_sumpt = cand_sumpt,
                                         cand_sumpt2 = cand_sumpt2, truth_z = truth_z,
