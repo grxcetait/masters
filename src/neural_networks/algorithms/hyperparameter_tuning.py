@@ -119,7 +119,7 @@ def load_data():
     dz = np.abs(cand_z - truth_z[:, None])
 
     # Set empty slots to infinity so they can never be the closest (NaN would break argmin)
-        # Originally cand_z = NaN so dz would also be NaN. This is fixed now
+    # Originally cand_z = NaN so dz would also be NaN. This is fixed now
     dz = np.where(empty, np.inf, dz)
 
     # Find the candidate with the smallest dz

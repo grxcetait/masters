@@ -14,6 +14,7 @@ import os
 
 import pandas as pd
 import numpy as np
+import itertools
 
 import matplotlib.pyplot as plt
 
@@ -48,10 +49,6 @@ sig_z0_max = 10.0   # [mm]
 n_sigma = 4.0
 use_d0_weight = True
 
-# Box (sum pT window) settings
-box_res = 0.1       # [mm]
-box_power = 1       # 1 = pT weighted
-
 # Two-step settings
 s_max = 3.0
 n_cand = 30
@@ -62,11 +59,9 @@ tol = 0.3
 
 # Saved per-event results, used to choose the events
 base_dir = "outputs/sem1week4"
-output_dir = "outputs/sem1week7"
+output_dir = "outputs/sem1week8"
 selection_folder = f"{pt_min}ptmin_{pt_max}ptmax_{eta_max}etamax"
 out_dir = os.path.join(output_dir)
-#gaussian_csv = os.path.join(base_dir, "gaussian_weighting", selection_folder, "vertex_results_d0True_normTrue.csv")
-#box_csv = os.path.join(base_dir, "sumpt", selection_folder, f"vertex_results_res{box_res}_pt{box_power}.csv")
 two_step_npz = os.path.join(base_dir, "two_steps", selection_folder, f"vertex_candidates_s{s_max}.npz")
 
 npz_filename = "vertex_candidates_s3_0.npz"
@@ -96,15 +91,10 @@ def get_features(d):
 
     # Log transform the positive, log-tailed features so they are on a similar scale
     features = {
-        "z" : z,
         "log_height" : np.log1p(height),
         "log_ntrk" : np.log1p(ntrk),
         "log_sumpt" : np.log1p(sumpt),
         "log_sumpt2" : np.log1p(sumpt2)
-        #"height" : height,
-        #"ntrk" : ntrk,
-        #"sumpt" : sumpt,
-        #"sumpt2" : sumpt2
     }
 
     # Stack into one array of shape (events, candidates, features)
@@ -299,14 +289,8 @@ def summarise(name, chosen, target, cand_z, truth_z):
 
 def feature_correlation(X, empty, target, feature_names):
 
-    # Label each candidate: 1 if it is the matched true vertex, 0 otherwise
-    #is_pv = np.zeros(empty.shape, dtype = float)
-    #found = np.where(target >= 0)[0]
-    #is_pv[found, target[found]] = 1.0
-
     # One row per real (non-empty) candidate
     df = pd.DataFrame(X[~empty], columns = feature_names)
-    #df["is_PV"] = is_pv[~empty]
 
     # Spearman (rank) correlation: not affected by the log transforms or outliers
     corr = df.corr(method = "spearman")
@@ -332,11 +316,11 @@ def feature_correlation(X, empty, target, feature_names):
 
     return corr
 
-def drop_one_feature(X_scaled, empty, target, train_idx, test_idx, feature_names, device):
+def drop_one_feature(X_scaled, target, train_idx, val_idx, feature_names, device):
 
     # Targets are the same for every run, so only make them once
     y_train = torch.tensor(target[train_idx], dtype = torch.long, device = device)
-    y_test = torch.tensor(target[test_idx], dtype = torch.long, device = device)
+    y_val = torch.tensor(target[val_idx], dtype = torch.long, device = device)
 
     # Empty list to hold results 
     rows = []
@@ -348,26 +332,67 @@ def drop_one_feature(X_scaled, empty, target, train_idx, test_idx, feature_names
         # Keep every feature except the dropped one
         keep = [k for k, name in enumerate(feature_names) if name != dropped]
         X_train = torch.tensor(X_scaled[train_idx][:, :, keep], dtype = torch.float32, device = device)
-        X_test = torch.tensor(X_scaled[test_idx][:, :, keep], dtype = torch.float32, device = device)
+        X_val = torch.tensor(X_scaled[val_idx][:, :, keep], dtype = torch.float32, device = device)
 
         # Retrain from the same starting seed each time
         torch.manual_seed(seed)
         model = VertexRegressor(len(keep), layers, neurons).to(device)
         optimiser = optim.Adam(model.parameters(), lr = lr)
-        train_model(model, X_train, y_train, X_test, y_test, nn.CrossEntropyLoss(), optimiser)
+        train_model(model, X_train, y_train, X_val, y_val, nn.CrossEntropyLoss(), optimiser)
 
-        # Store the test efficiency and loss without this feature
+        # Store the val efficiency and loss without this feature
         rows.append({"Dropped": dropped or "none",
-                     "Test eff (%)": 100 * efficiency(model, X_test, target[test_idx]),
-                     "Test loss": loss_on(model, X_test, y_test)})
+                     "Val eff (%)": 100 * efficiency(model, X_val, target[val_idx]),
+                     "Val loss": loss_on(model, X_val, y_val)})
 
     # Change relative to the reference run with all features (first row)
     df = pd.DataFrame(rows)
-    df["Eff change (%)"] = df["Test eff (%)"] - df["Test eff (%)"].iloc[0]
-    df["Loss change"] = df["Test loss"] - df["Test loss"].iloc[0]
+    df["Eff change (%)"] = df["Val eff (%)"] - df["Val eff (%)"].iloc[0]
+    df["Loss change"] = df["Val loss"] - df["Val loss"].iloc[0]
     print("\nDrop-one-feature retraining:")
     print(df.to_string(index = False, float_format = "%.4f"))
     df.to_csv(os.path.join(out_dir, "drop_one_feature.csv"), index = False)
+
+    return df
+
+def drop_two_features(X_scaled, target, train_idx, val_idx, feature_names, device):
+
+    # Targets are the same for every run, so only make them once
+    y_train = torch.tensor(target[train_idx], dtype = torch.long, device = device)
+    y_val = torch.tensor(target[val_idx], dtype = torch.long, device = device)
+
+    # Empty list to hold results 
+    rows = []
+
+    # Every pair of features to drop, with an empty tuple to keep all the features as a reference
+    combos = [()] + list(itertools.combinations(feature_names, 2))
+
+    # Iterate through each feature, dropping one at a time and running the model
+    for dropped in combos:
+
+        # Keep every feature except the dropped ones
+        keep = [k for k, name in enumerate(feature_names) if name not in dropped]
+        X_train = torch.tensor(X_scaled[train_idx][:, :, keep], dtype = torch.float32, device = device)
+        X_val = torch.tensor(X_scaled[val_idx][:, :, keep], dtype = torch.float32, device = device)
+
+        # Retrain from the same starting seed each time
+        torch.manual_seed(seed)
+        model = VertexRegressor(len(keep), layers, neurons).to(device)
+        optimiser = optim.Adam(model.parameters(), lr = lr)
+        train_model(model, X_train, y_train, X_val, y_val, nn.CrossEntropyLoss(), optimiser)
+
+        # Store the val efficiency and loss without this feature
+        rows.append({"Dropped": " & ".join(dropped) or "none",
+                     "Val eff (%)": 100 * efficiency(model, X_val, target[val_idx]),
+                     "Val loss": loss_on(model, X_val, y_val)})
+
+    # Change relative to the reference run with all features (first row)
+    df = pd.DataFrame(rows)
+    df["Eff change (%)"] = df["Val eff (%)"] - df["Val eff (%)"].iloc[0]
+    df["Loss change"] = df["Val loss"] - df["Val loss"].iloc[0]
+    print("\nDrop-two-feature retraining:")
+    print(df.to_string(index = False, float_format = "%.4f"))
+    df.to_csv(os.path.join(out_dir, "drop_two_features.csv"), index = False)
 
     return df
 
@@ -388,7 +413,8 @@ def main():
 
     # Split data into test and training by events
     all_events = np.arange(n_events)
-    train_idx, test_idx = train_test_split(all_events, test_size = test_fraction, random_state = seed)
+    training_idx, test_idx = train_test_split(all_events, test_size = test_fraction, random_state = seed)
+    train_idx, val_idx = train_test_split(training_idx, test_size = validation_fraction / (1 - test_fraction), random_state = seed)
 
     # Events where the truth is not among the candidates can't be learnt from
     print(f"Number of events where the truth is not among the candidates: {np.sum(target[train_idx] < 0)} / {len(train_idx)}")
@@ -400,9 +426,12 @@ def main():
     X_scaled = scaler_X.transform(X.reshape(-1, n_feat)).reshape(n_events, n_cand, n_feat)
     X_scaled[empty] = 0.0
 
-    # Create the training and test tensore (features and target)
+    # Create the training, validation and test tensors (features and target)
     X_train = torch.tensor(X_scaled[train_idx], dtype = torch.float32, device = device)
     y_train = torch.tensor(target[train_idx], dtype = torch.long, device = device)
+    X_val = torch.tensor(X_scaled[val_idx], dtype = torch.float32, device = device)
+    t_val = target[val_idx]
+    y_val = torch.tensor(target[val_idx], dtype = torch.long, device = device)
     X_test = torch.tensor(X_scaled[test_idx], dtype = torch.float32, device = device)
     y_test = torch.tensor(target[test_idx], dtype = torch.long, device = device)
 
@@ -455,7 +484,8 @@ def main():
 
     # Feature correlation and ranking
     feature_correlation(X, empty, target, feature_names)
-    drop_one_feature(X_scaled, empty, target, train_idx, test_idx, feature_names, device)
+    drop_one_feature(X_scaled, target, train_idx, val_idx, feature_names, device)
+    drop_two_features(X_scaled, target, train_idx, val_idx, feature_names, device)
 
 if __name__ == "__main__":
 
